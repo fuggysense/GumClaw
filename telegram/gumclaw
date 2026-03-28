@@ -385,15 +385,25 @@ launch_bot() {
     exit 1
   fi
 
+  # === Step 1: Show bot info ===
+  echo ""
+  if [[ "$HAS_GUM" == "1" ]]; then
+    gum style --foreground "#8B7F77" "  Step 1 — Bot"
+    echo "  $(gum style --foreground '#2FBF71' '✓') @$username — $purpose"
+  else
+    echo -e "  ${DIM}Step 1 — Bot${NC}"
+    echo -e "  ${GREEN}✓${NC} @$username — $purpose"
+  fi
+
   # Validate token
   local valid_user
   if [[ "$HAS_GUM" == "1" ]]; then
-    valid_user=$(gum spin --spinner dot --title "  Connecting to @$username..." -- bash -c "
+    valid_user=$(gum spin --spinner dot --title "  Validating token..." -- bash -c "
       result=\$(curl -s --max-time 5 'https://api.telegram.org/bot${token}/getMe')
       echo \"\$result\" | jq -r '.result.username // empty'
     ")
   else
-    echo -n "  Validating @$username... "
+    echo -n "  Validating... "
     valid_user=$(validate_token "$token") || true
   fi
 
@@ -402,42 +412,116 @@ launch_bot() {
     exit 1
   fi
 
-  # CD to project dir — offer choice if bot has a pinned directory
-  local launch_dir="$(pwd)"
-  if [[ -n "$project" ]] && [[ -d "$project" ]]; then
-    if [[ "$HAS_GUM" == "1" ]]; then
-      local dir_choice
-      dir_choice=$(printf '%s\n' \
-        "📁 $(echo "$project" | sed "s|^$HOME|~|") (saved)" \
-        "📂 Browse for different folder" \
-        "📍 Stay here ($(pwd | sed "s|^$HOME|~|"))" \
-        | gum choose --cursor.foreground "#FF5A2D")
+  # === Step 2: Project directory ===
+  echo ""
+  if [[ "$HAS_GUM" == "1" ]]; then
+    gum style --foreground "#8B7F77" "  Step 2 — Project directory"
+  else
+    echo -e "  ${DIM}Step 2 — Project directory${NC}"
+  fi
 
-      if [[ "$dir_choice" == *"saved"* ]]; then
-        cd "$project"
-        launch_dir="$project"
-      elif [[ "$dir_choice" == *"Browse"* ]]; then
-        local new_dir
-        new_dir=$(browse_directory) || new_dir=""
-        if [[ -n "$new_dir" ]] && [[ -d "$new_dir" ]]; then
-          cd "$new_dir"
-          launch_dir="$new_dir"
+  local launch_dir="$(pwd)"
+  local dir_confirmed=false
+
+  while [[ "$dir_confirmed" != "true" ]]; do
+    if [[ -n "$project" ]] && [[ -d "$project" ]]; then
+      # Bot has a saved directory
+      local saved_display
+      saved_display=$(echo "$project" | sed "s|^$HOME|~|")
+
+      if [[ "$HAS_GUM" == "1" ]]; then
+        local dir_choice
+        dir_choice=$(printf '%s\n' \
+          "Yes — use $saved_display" \
+          "No — choose a different folder" \
+          | gum choose --header "  Use saved directory?" --cursor.foreground "#FF5A2D")
+
+        if [[ "$dir_choice" == "Yes"* ]]; then
+          launch_dir="$project"
+          dir_confirmed=true
+        else
+          # Browse for different folder
+          local new_dir
+          new_dir=$(browse_directory) || new_dir=""
+          if [[ -n "$new_dir" ]] && [[ -d "$new_dir" ]]; then
+            launch_dir="$new_dir"
+            # Show confirmation
+            local confirm_display
+            confirm_display=$(echo "$launch_dir" | sed "s|^$HOME|~|")
+            local confirm_choice
+            confirm_choice=$(gum confirm "  Use: $confirm_display?" && echo "y" || echo "n")
+            if [[ "$confirm_choice" == "y" ]]; then
+              dir_confirmed=true
+            fi
+            # If not confirmed, loop back to ask again
+          fi
         fi
+      else
+        echo "  Saved directory: $(echo "$project" | sed "s|^$HOME|~|")"
+        read -p "  Use this? [Y/n] " dir_input
+        if [[ "$dir_input" == "n" || "$dir_input" == "N" ]]; then
+          read -p "  Enter path: " new_path
+          if [[ -n "$new_path" ]] && [[ -d "$new_path" ]]; then
+            launch_dir="$new_path"
+          fi
+        else
+          launch_dir="$project"
+        fi
+        dir_confirmed=true
       fi
     else
-      echo "  Pinned to: $(echo "$project" | sed "s|^$HOME|~|")"
-      read -p "  Use this directory? [Y/n/path] " dir_input
-      if [[ "$dir_input" == "n" || "$dir_input" == "N" ]]; then
-        launch_dir="$(pwd)"
-      elif [[ -n "$dir_input" ]] && [[ -d "$dir_input" ]]; then
-        cd "$dir_input"
-        launch_dir="$dir_input"
+      # No saved directory — ask to browse or use current
+      if [[ "$HAS_GUM" == "1" ]]; then
+        local dir_choice
+        dir_choice=$(printf '%s\n' \
+          "📍 Stay here — $(pwd | sed "s|^$HOME|~|")" \
+          "📂 Browse for a folder" \
+          | gum choose --header "  Choose project directory:" --cursor.foreground "#FF5A2D")
+
+        if [[ "$dir_choice" == *"Stay"* ]]; then
+          launch_dir="$(pwd)"
+          dir_confirmed=true
+        else
+          local new_dir
+          new_dir=$(browse_directory) || new_dir=""
+          if [[ -n "$new_dir" ]] && [[ -d "$new_dir" ]]; then
+            launch_dir="$new_dir"
+            local confirm_display
+            confirm_display=$(echo "$launch_dir" | sed "s|^$HOME|~|")
+            local confirm_choice
+            confirm_choice=$(gum confirm "  Use: $confirm_display?" && echo "y" || echo "n")
+            if [[ "$confirm_choice" == "y" ]]; then
+              dir_confirmed=true
+            fi
+          else
+            launch_dir="$(pwd)"
+            dir_confirmed=true
+          fi
+        fi
       else
-        cd "$project"
-        launch_dir="$project"
+        read -p "  Project directory [$(pwd)]: " new_path
+        launch_dir="${new_path:-$(pwd)}"
+        dir_confirmed=true
       fi
     fi
+  done
+
+  # Show confirmed directory
+  local display_dir
+  display_dir=$(echo "$launch_dir" | sed "s|^$HOME|~|")
+  if [[ "$HAS_GUM" == "1" ]]; then
+    echo "  $(gum style --foreground '#2FBF71' '✓') $display_dir"
+  else
+    echo -e "  ${GREEN}✓${NC} $display_dir"
   fi
+
+  # CD to selected directory
+  if [[ -d "$launch_dir" ]]; then
+    cd "$launch_dir"
+  fi
+
+  # === Step 3: Launch ===
+  echo ""
 
   # Run auto-pair
   bash "$CHANNELS_DIR/auto-pair.sh" 2>/dev/null || true
@@ -445,13 +529,28 @@ launch_bot() {
   # Write lock
   lock_bot "$bot_id" "$launch_dir"
 
-  echo ""
+  # Show summary
   if [[ "$HAS_GUM" == "1" ]]; then
-    gum style --foreground "#2FBF71" "  🐾 Launching Claude Code with @$username"
-    echo "  $(gum style --foreground '#8B7F77' "  $purpose • $(echo "$launch_dir" | sed "s|^$HOME|~|")")"
+    gum style --foreground "#8B7F77" "  Step 3 — Launch"
+    echo ""
+    gum style \
+      --foreground "#2FBF71" \
+      --border-foreground "#2FBF71" \
+      --border rounded \
+      --padding "0 2" \
+      --margin "0 2" \
+      "🐾 Launching Claude Code" \
+      "" \
+      "  Bot:     @$username" \
+      "  Purpose: $purpose" \
+      "  Dir:     $display_dir"
   else
-    echo -e "  ${GREEN}🐾 Launching Claude Code with @$username${NC}"
-    echo -e "  ${DIM}$purpose • ${launch_dir/#$HOME/\~}${NC}"
+    echo -e "  ${DIM}Step 3 — Launch${NC}"
+    echo ""
+    echo -e "  ${GREEN}🐾 Launching Claude Code${NC}"
+    echo "    Bot:     @$username"
+    echo "    Purpose: $purpose"
+    echo "    Dir:     $display_dir"
   fi
   echo ""
 
