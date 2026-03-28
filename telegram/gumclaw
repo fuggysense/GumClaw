@@ -40,6 +40,49 @@ header() {
   fi
 }
 
+browse_directory() {
+  # Interactive directory browser using gum choose
+  # Returns selected directory path, or empty string if cancelled
+  local current="$HOME"
+  while true; do
+    local display_path
+    display_path=$(echo "$current" | sed "s|^$HOME|~|")
+
+    # Build list of subdirectories
+    local dirs=()
+    dirs+=("✓ USE THIS: $display_path")
+    dirs+=("⬆ Go up")
+    while IFS= read -r d; do
+      [[ -n "$d" ]] && dirs+=("📁 $(basename "$d")")
+    done < <(find "$current" -maxdepth 1 -type d -not -name '.*' -not -path "$current" 2>/dev/null | sort)
+    dirs+=("✕ Skip (no directory)")
+
+    local choice
+    choice=$(printf '%s\n' "${dirs[@]}" | gum choose --height 18 --header "  📂 $display_path" --cursor.foreground "#FF5A2D")
+
+    if [[ "$choice" == "✓ USE THIS"* ]]; then
+      echo "$current"
+      return 0
+    elif [[ "$choice" == "⬆ Go up" ]]; then
+      local parent
+      parent=$(dirname "$current")
+      if [[ "$parent" != "$current" ]]; then
+        current="$parent"
+      fi
+    elif [[ "$choice" == "✕ Skip"* ]]; then
+      echo ""
+      return 0
+    elif [[ "$choice" == "📁 "* ]]; then
+      local dirname
+      dirname=$(echo "$choice" | sed 's/^📁 //')
+      current="$current/$dirname"
+    else
+      echo ""
+      return 0
+    fi
+  done
+}
+
 ensure_registry() {
   mkdir -p "$LOCKS_DIR"
   chmod 700 "$LOCKS_DIR"
@@ -261,16 +304,7 @@ cmd_add() {
   local project=""
   echo ""
   if [[ "$HAS_GUM" == "1" ]]; then
-    echo "  Select project directory (or Esc to skip):"
-    project=$(gum file --directory --height 15 "$HOME" 2>/dev/null) || project=""
-    if [[ -n "$project" ]]; then
-      local confirm_dir
-      confirm_dir=$(gum confirm "  Use: $(echo "$project" | sed "s|^$HOME|~|")?" && echo "y" || echo "n")
-      if [[ "$confirm_dir" != "y" ]]; then
-        echo "  Try again or Esc to skip:"
-        project=$(gum file --directory --height 15 "$HOME" 2>/dev/null) || project=""
-      fi
-    fi
+    project=$(browse_directory) || project=""
   else
     read -p "  Project directory (Enter to skip): " project
   fi
@@ -384,7 +418,7 @@ launch_bot() {
         launch_dir="$project"
       elif [[ "$dir_choice" == *"Browse"* ]]; then
         local new_dir
-        new_dir=$(gum file --directory --height 15 "$HOME" 2>/dev/null) || new_dir=""
+        new_dir=$(browse_directory) || new_dir=""
         if [[ -n "$new_dir" ]] && [[ -d "$new_dir" ]]; then
           cd "$new_dir"
           launch_dir="$new_dir"
