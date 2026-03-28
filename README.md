@@ -1,21 +1,21 @@
-# ClaudeClaw Seamless
+# GumClaw
 
-Persistent Claude Code agents with zero-friction Telegram connectivity. Workspace blueprint + auto-pairing in one package.
+Multi-bot Telegram launcher for Claude Code. Register multiple bots, pick one per session, auto-pair trusted users.
 
-Built on [ClaudeClaw](https://github.com/robonuggets/claudeclaw) by Jay from RoboLabs.
+Built on [ClaudeClaw](https://github.com/robonuggets/claudeclaw) by Jay from RoboLabs. Powered by [gum](https://github.com/charmbracelet/gum).
 
 ## What you get
 
-**Workspace** — Multi-agent setup with session persistence
+**GumClaw Launcher** — one command to manage all your Telegram bots
+- Interactive bot picker with styled terminal UI
+- Multi-bot registry with lock tracking (no two sessions fight over the same bot)
+- Auto-pair eliminates manual pairing codes
+- Each bot pins to a project directory — auto-cd on launch
+
+**Workspace Blueprint** — multi-agent setup with session persistence
 - Primary agent + up to 3 sub-agents (alpha/beta/gamma)
 - SOUL.md (personality), USER.md (context), CLAUDE.md (instructions)
-- Cron registry that survives session restarts
-- Shared memory across agents
-
-**Telegram** — Message your agent from your phone
-- Auto-pairing eliminates manual pairing codes
-- SessionStart hook ensures connectivity on every session
-- Works across plugin updates and path changes
+- Cron registry, shared memory
 
 ## Setup
 
@@ -37,66 +37,91 @@ cd claudeclaw-seamless
 bash install.sh
 ```
 
-Interactive — walks through workspace scaffolding and Telegram configuration.
-
-## After setup
+## Usage
 
 ```bash
-cd ~/agent-workspace   # or wherever you set it up
-claude --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official
+gumclaw                    # Pick a bot → launch Claude Code
+gumclaw <bot-id>           # Direct launch with specific bot
+gumclaw --add              # Register a new bot from @BotFather
+gumclaw --list             # See all bots + which are in use
+gumclaw --release <id>     # Force-release a stuck lock
 ```
 
-DM your bot on Telegram. It works immediately.
+### Multi-bot workflow
 
-## How auto-pair works
+```bash
+# Terminal 1 — Marketing
+$ gumclaw
+  > marketing_bot    @marketing_bot    Marketing agent    ~/Marketing
+    video_bot        @video_bot        Video production   ~/Videos
 
-The official Telegram plugin stores access control in a relative path inside the plugin directory. This path varies between plugin versions and installation methods. The documented path (`~/.claude/channels/telegram/`) is not where the server actually reads from.
+# Terminal 2 — Video
+$ gumclaw
+    marketing_bot    @marketing_bot    Marketing agent    [IN USE: PID 44047]
+  > video_bot        @video_bot        Video production   ~/Videos
+```
 
-`auto-pair.sh` runs on every Claude Code session start and finds ALL Telegram access files across all plugin directories. It pre-approves your user ID in every one, so pairing just works regardless of which path is active.
+Each session gets its own bot. No conflicts.
+
+## How it works
+
+1. **Bot registry** (`bot-registry.json`) stores all your bots with tokens, purposes, and project dirs
+2. **GumClaw launcher** lets you pick a bot, validates the token, writes a lock file, then `exec`s into Claude Code with that bot's token
+3. **Lock files** track which bot is used by which session (PID-based, auto-cleaned when session dies)
+4. **Auto-pair** syncs trusted users into all plugin state dirs on every session start
 
 ## Requirements
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Pro or Max subscription)
 - [Bun](https://bun.sh) runtime (installer handles this)
-- [jq](https://jqlang.github.io/jq/) (`brew install jq` on Mac)
-- A Telegram bot token (from @BotFather)
-- Your Telegram user ID (from @userinfobot)
+- [jq](https://jqlang.github.io/jq/) (`brew install jq`)
+- [gum](https://github.com/charmbracelet/gum) (`brew install gum`) — optional, falls back to plain prompts
+- Telegram bot token(s) from @BotFather
+- Your Telegram user ID from @userinfobot
 
 ## Files
 
 ```
 claudeclaw-seamless/
 ├── CLAUDE.md                        # Repo instructions
-├── README.md                        # This file
 ├── install.sh                       # Bash installer
 ├── .claude/skills/
 │   └── setup.md                     # Guided /setup skill
 ├── template/                        # Workspace blueprint
-│   ├── CLAUDE.md                    # Agent instructions
-│   ├── SOUL.md                      # Personality rules
-│   ├── USER.md                      # User context
-│   ├── cron-registry.json           # Scheduled tasks
-│   ├── .claude/skills/
-│   │   └── daily-summary.md         # Example skill
-│   ├── agents/{alpha,beta,gamma}/   # Sub-agent workspaces
-│   ├── shared/memory/               # Cross-agent memory
-│   └── memory/                      # Primary agent memory
-└── telegram/                        # Auto-pair system
-    ├── auto-pair.sh                 # Syncs access across plugin dirs
-    ├── trusted-users.template.json  # User ID config template
-    └── SETUP-GUIDE.md              # Troubleshooting reference
+│   ├── CLAUDE.md, SOUL.md, USER.md
+│   ├── agents/{alpha,beta,gamma}/
+│   └── shared/memory/
+└── telegram/                        # GumClaw system
+    ├── gumclaw                      # Launcher script
+    ├── auto-pair.sh                 # Access syncing + stale lock cleanup
+    ├── discover-groups.sh           # Find group chat IDs
+    ├── trusted-users.template.json  # User/group config template
+    └── SETUP-GUIDE.md              # Troubleshooting
+```
+
+**Installed to:**
+```
+~/.claude/channels/telegram/
+├── gumclaw                  # Launcher (symlinked to PATH)
+├── bot-registry.json        # All bots + tokens (chmod 600)
+├── locks/                   # Per-bot PID locks
+├── trusted-users.json       # Auto-approve user IDs
+├── auto-pair.sh             # SessionStart hook
+└── .env                     # Default bot token (legacy fallback)
 ```
 
 ## Known limitations
 
-- **First message delay**: The first Telegram message after idle may not arrive. Send a second message — it's a channels protocol issue, not fixable at this layer.
-- **No offline queue**: Messages sent while Claude Code is closed are lost.
-- **No message history**: The bot only sees messages that arrive while the session is running.
+- **One bot per session** — Telegram API allows only one consumer per bot token
+- **Can't switch bots mid-session** — the plugin reads the token once at startup. Use `gumclaw` to relaunch.
+- **First message delay** — first Telegram message after idle may not arrive. Send a second.
+- **No offline queue** — messages sent while Claude Code is closed are lost.
 
 ## Credits
 
-- [ClaudeClaw](https://github.com/robonuggets/claudeclaw) by Jay from RoboLabs — workspace blueprint and architecture patterns
-- Telegram auto-pair by Jerel — seamless connectivity fix
+- [ClaudeClaw](https://github.com/robonuggets/claudeclaw) by Jay from RoboLabs — workspace blueprint
+- [gum](https://github.com/charmbracelet/gum) by Charmbracelet — terminal UI
+- GumClaw by Jerel — multi-bot registry + auto-pair
 
 ## License
 

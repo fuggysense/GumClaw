@@ -4,6 +4,18 @@
 
 set -euo pipefail
 
+# Clean stale GumClaw locks
+LOCK_DIR="$HOME/.claude/channels/telegram/locks"
+if [[ -d "$LOCK_DIR" ]]; then
+  for lockfile in "$LOCK_DIR"/*.lock; do
+    [[ -f "$lockfile" ]] || continue
+    PID=$(jq -r '.pid' "$lockfile" 2>/dev/null)
+    if [[ -n "$PID" ]] && ! kill -0 "$PID" 2>/dev/null; then
+      rm -f "$lockfile"
+    fi
+  done
+fi
+
 CONFIG="$HOME/.claude/channels/telegram/trusted-users.json"
 
 if [[ ! -f "$CONFIG" ]]; then

@@ -208,11 +208,49 @@ else
     fi
   fi
 
-  # Auto-pair script
+  # Auto-pair script + GumClaw launcher
   cp "$SCRIPT_DIR/telegram/auto-pair.sh" "$CHANNELS_DIR/auto-pair.sh"
   chmod +x "$CHANNELS_DIR/auto-pair.sh"
+  cp "$SCRIPT_DIR/telegram/gumclaw" "$CHANNELS_DIR/gumclaw"
+  chmod +x "$CHANNELS_DIR/gumclaw"
   cp "$SCRIPT_DIR/telegram/SETUP-GUIDE.md" "$CHANNELS_DIR/SETUP-GUIDE.md"
-  echo "[ok] Auto-pair installed"
+  mkdir -p "$CHANNELS_DIR/locks"
+  chmod 700 "$CHANNELS_DIR/locks"
+  echo "[ok] Auto-pair + GumClaw installed"
+
+  # Create bot registry from token
+  if [[ ! -f "$CHANNELS_DIR/bot-registry.json" ]] && [[ -f "$CHANNELS_DIR/.env" ]]; then
+    REG_TOKEN=$(grep "TELEGRAM_BOT_TOKEN=" "$CHANNELS_DIR/.env" | cut -d= -f2)
+    if [[ -n "$REG_TOKEN" ]]; then
+      REG_USER=$(curl -s --max-time 5 "https://api.telegram.org/bot${REG_TOKEN}/getMe" | jq -r '.result.username // empty')
+      REG_USER="${REG_USER:-bot}"
+      REG_ID=$(echo "$REG_USER" | sed 's/_bot$//' | sed 's/[^a-zA-Z0-9_]/_/g')
+      jq -n --arg id "$REG_ID" --arg username "$REG_USER" --arg token "$REG_TOKEN" \
+        --arg purpose "Default bot" --arg created "$(date +%Y-%m-%d)" \
+        '{"version":1,"bots":[{"id":$id,"username":$username,"token":$token,"purpose":$purpose,"project":null,"created":$created}]}' \
+        > "$CHANNELS_DIR/bot-registry.json"
+      chmod 600 "$CHANNELS_DIR/bot-registry.json"
+      echo "[ok] Bot registry created ($REG_ID @$REG_USER)"
+    fi
+  fi
+
+  # Symlink gumclaw to PATH
+  if [[ -d /opt/homebrew/bin ]]; then
+    ln -sf "$CHANNELS_DIR/gumclaw" /opt/homebrew/bin/gumclaw 2>/dev/null || true
+  elif [[ -d /usr/local/bin ]]; then
+    ln -sf "$CHANNELS_DIR/gumclaw" /usr/local/bin/gumclaw 2>/dev/null || true
+  fi
+
+  # Check for gum
+  if ! command -v gum &>/dev/null; then
+    echo ""
+    echo "  Optional: install 'gum' for a nicer UI"
+    echo "    brew install gum  (Mac)"
+    echo "    go install github.com/charmbracelet/gum@latest  (any OS)"
+    echo "  GumClaw works without it, just plain text prompts."
+  else
+    echo "[ok] gum found"
+  fi
 
   # SessionStart hook
   if [[ -f "$SETTINGS" ]]; then
@@ -257,10 +295,9 @@ if [[ "${SETUP_TG,,}" != "n" ]]; then
   echo ""
 fi
 echo "Launch:"
-if [[ "${SKIP_WORKSPACE:-}" != "true" ]]; then
-  echo "  cd $WORKSPACE"
-fi
-echo "  claude --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official"
+echo "  gumclaw                    # Pick a bot and launch"
+echo "  gumclaw --add              # Register a new bot"
+echo "  gumclaw --list             # See all bots"
 echo ""
 echo "First time: DM your bot on Telegram — auto-pair handles the rest."
 echo ""

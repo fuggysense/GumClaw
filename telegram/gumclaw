@@ -1,0 +1,529 @@
+#!/bin/bash
+# GumClaw — Telegram Bot Launcher for Claude Code
+# Manages multiple bots, picks one, launches Claude Code with that bot's token.
+# Powered by charmbracelet/gum for interactive UI.
+
+set -euo pipefail
+
+REGISTRY="$HOME/.claude/channels/telegram/bot-registry.json"
+LOCKS_DIR="$HOME/.claude/channels/telegram/locks"
+CHANNELS_DIR="$HOME/.claude/channels/telegram"
+HAS_GUM=$(command -v gum &>/dev/null && echo "1" || echo "0")
+
+# --- Colors (fallback when no gum) ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# --- Helpers ---
+
+header() {
+  if [[ "$HAS_GUM" == "1" ]]; then
+    gum style \
+      --foreground "#FF5A2D" \
+      --border-foreground "#FF5A2D" \
+      --border double \
+      --align center \
+      --width 40 \
+      --margin "1 0" \
+      "🐾 GumClaw" \
+      "Telegram Bot Launcher"
+  else
+    echo ""
+    echo -e "${BOLD}  🐾 GumClaw${NC}"
+    echo -e "  ${DIM}Telegram Bot Launcher${NC}"
+    echo ""
+  fi
+}
+
+ensure_registry() {
+  mkdir -p "$LOCKS_DIR"
+  chmod 700 "$LOCKS_DIR"
+  if [[ ! -f "$REGISTRY" ]]; then
+    echo '{"version":1,"bots":[]}' | jq '.' > "$REGISTRY"
+    chmod 600 "$REGISTRY"
+  fi
+}
+
+clean_stale_locks() {
+  [[ -d "$LOCKS_DIR" ]] || return 0
+  for lockfile in "$LOCKS_DIR"/*.lock; do
+    [[ -f "$lockfile" ]] || continue
+    local pid
+    pid=$(jq -r '.pid' "$lockfile" 2>/dev/null)
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$lockfile"
+    fi
+  done
+}
+
+is_bot_locked() {
+  local bot_id="$1"
+  local lockfile="$LOCKS_DIR/${bot_id}.lock"
+  if [[ -f "$lockfile" ]]; then
+    local pid
+    pid=$(jq -r '.pid' "$lockfile" 2>/dev/null)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "$pid"
+      return 0
+    else
+      rm -f "$lockfile"
+    fi
+  fi
+  return 1
+}
+
+lock_bot() {
+  local bot_id="$1"
+  local cwd="$2"
+  jq -n --arg pid "$$" --arg cwd "$cwd" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{pid: ($pid | tonumber), claimed_at: $ts, cwd: $cwd}' > "$LOCKS_DIR/${bot_id}.lock"
+  chmod 600 "$LOCKS_DIR/${bot_id}.lock"
+}
+
+validate_token() {
+  local token="$1"
+  local result
+  result=$(curl -s --max-time 5 "https://api.telegram.org/bot${token}/getMe" 2>/dev/null)
+  if echo "$result" | jq -e '.ok == true' &>/dev/null; then
+    echo "$result" | jq -r '.result.username'
+    return 0
+  fi
+  return 1
+}
+
+bot_count() {
+  jq '.bots | length' "$REGISTRY"
+}
+
+get_bot_field() {
+  local index="$1"
+  local field="$2"
+  jq -r ".bots[$index].$field" "$REGISTRY"
+}
+
+get_bot_by_id() {
+  local id="$1"
+  jq -r ".bots[] | select(.id == \"$id\")" "$REGISTRY"
+}
+
+# --- Commands ---
+
+cmd_list() {
+  ensure_registry
+  clean_stale_locks
+
+  header
+
+  local count
+  count=$(bot_count)
+
+  if [[ "$count" -eq 0 ]]; then
+    echo "  No bots registered."
+    echo ""
+    echo "  Run: gumclaw --add"
+    return
+  fi
+
+  if [[ "$HAS_GUM" == "1" ]]; then
+    gum style --foreground "#8B7F77" "  Registered bots:"
+  else
+    echo -e "  ${DIM}Registered bots:${NC}"
+  fi
+  echo ""
+
+  for i in $(seq 0 $((count - 1))); do
+    local id username purpose project
+    id=$(get_bot_field "$i" "id")
+    username=$(get_bot_field "$i" "username")
+    purpose=$(get_bot_field "$i" "purpose")
+    project=$(get_bot_field "$i" "project")
+
+    local status_str=""
+    local lock_pid
+    if lock_pid=$(is_bot_locked "$id"); then
+      status_str=" [IN USE: PID $lock_pid]"
+    fi
+
+    local proj_str=""
+    if [[ "$project" != "null" ]] && [[ -n "$project" ]]; then
+      proj_str="📁 $(echo "$project" | sed "s|^$HOME|~|")"
+    fi
+
+    if [[ -n "$status_str" ]]; then
+      if [[ "$HAS_GUM" == "1" ]]; then
+        echo "  $(gum style --foreground '#FF5A2D' '●') $id  @$username  $purpose$(gum style --foreground '#E23D2D' "$status_str")"
+      else
+        echo -e "  ${RED}●${NC} $id  @$username  $purpose${RED}$status_str${NC}"
+      fi
+    else
+      if [[ "$HAS_GUM" == "1" ]]; then
+        echo "  $(gum style --foreground '#2FBF71' '●') $id  @$username  $purpose"
+      else
+        echo -e "  ${GREEN}●${NC} $id  @$username  $purpose"
+      fi
+    fi
+    if [[ -n "$proj_str" ]]; then
+      if [[ "$HAS_GUM" == "1" ]]; then
+        echo "    $(gum style --foreground '#8B7F77' "$proj_str")"
+      else
+        echo -e "    ${DIM}$proj_str${NC}"
+      fi
+    fi
+  done
+  echo ""
+}
+
+cmd_add() {
+  ensure_registry
+  header
+
+  if [[ "$HAS_GUM" == "1" ]]; then
+    gum style --foreground "#F6C453" "  New Bot Setup"
+    echo ""
+  else
+    echo -e "  ${YELLOW}New Bot Setup${NC}"
+    echo ""
+  fi
+
+  # Get token
+  local token
+  if [[ "$HAS_GUM" == "1" ]]; then
+    echo "  Get a token from @BotFather on Telegram."
+    echo ""
+    token=$(gum input --placeholder "Paste bot token here" --width 60 --prompt "  Token: ")
+  else
+    echo "  Get a token from @BotFather on Telegram."
+    echo ""
+    read -p "  Token: " token
+  fi
+
+  if [[ -z "$token" ]]; then
+    echo "  No token provided. Aborting."
+    exit 1
+  fi
+
+  # Validate
+  local username
+  if [[ "$HAS_GUM" == "1" ]]; then
+    username=$(gum spin --spinner dot --title "  Validating token..." -- bash -c "
+      result=\$(curl -s --max-time 5 'https://api.telegram.org/bot${token}/getMe')
+      echo \"\$result\" | jq -r '.result.username // empty'
+    ")
+  else
+    echo -n "  Validating... "
+    username=$(validate_token "$token") || true
+  fi
+
+  if [[ -z "$username" ]]; then
+    echo -e "  ${RED}Invalid token. Check and try again.${NC}"
+    exit 1
+  fi
+
+  if [[ "$HAS_GUM" == "1" ]]; then
+    echo "  $(gum style --foreground '#2FBF71' "✓") Found: @$username"
+  else
+    echo -e "  ${GREEN}✓${NC} Found: @$username"
+  fi
+  echo ""
+
+  # Check if already registered
+  if jq -e --arg u "$username" '.bots[] | select(.username == $u)' "$REGISTRY" &>/dev/null; then
+    echo -e "  ${YELLOW}This bot is already registered.${NC}"
+    exit 0
+  fi
+
+  # Get purpose
+  local purpose
+  if [[ "$HAS_GUM" == "1" ]]; then
+    purpose=$(gum input --placeholder "e.g., Marketing agent" --width 50 --prompt "  Purpose: ")
+  else
+    read -p "  Purpose: " purpose
+  fi
+  purpose="${purpose:-General assistant}"
+
+  # Get ID
+  local bot_id
+  local default_id
+  default_id=$(echo "$username" | sed 's/_bot$//' | sed 's/[^a-zA-Z0-9_]/_/g')
+  if [[ "$HAS_GUM" == "1" ]]; then
+    bot_id=$(gum input --value "$default_id" --width 30 --prompt "  Short ID: ")
+  else
+    read -p "  Short ID [$default_id]: " bot_id
+  fi
+  bot_id="${bot_id:-$default_id}"
+
+  # Get project directory
+  local project=""
+  local set_project
+  if [[ "$HAS_GUM" == "1" ]]; then
+    set_project=$(gum confirm "  Pin to a project directory?" && echo "y" || echo "n")
+  else
+    read -p "  Pin to a project directory? [y/N] " set_project
+  fi
+
+  if [[ "${set_project,,}" == "y" ]]; then
+    if [[ "$HAS_GUM" == "1" ]]; then
+      project=$(gum file --directory --height 10 "$HOME")
+    else
+      read -p "  Project path: " project
+    fi
+  fi
+
+  # Save to registry
+  local created
+  created=$(date +%Y-%m-%d)
+  local project_json
+  if [[ -n "$project" ]]; then
+    project_json="\"$project\""
+  else
+    project_json="null"
+  fi
+
+  jq --arg id "$bot_id" --arg username "$username" --arg token "$token" \
+     --arg purpose "$purpose" --argjson project "$project_json" --arg created "$created" \
+    '.bots += [{"id": $id, "username": $username, "token": $token, "purpose": $purpose, "project": $project, "created": $created}]' \
+    "$REGISTRY" > "${REGISTRY}.tmp"
+  mv "${REGISTRY}.tmp" "$REGISTRY"
+  chmod 600 "$REGISTRY"
+
+  echo ""
+  if [[ "$HAS_GUM" == "1" ]]; then
+    echo "  $(gum style --foreground '#2FBF71' "✓") Bot registered: $bot_id (@$username)"
+  else
+    echo -e "  ${GREEN}✓${NC} Bot registered: $bot_id (@$username)"
+  fi
+  echo ""
+
+  # Connect now?
+  local connect_now
+  if [[ "$HAS_GUM" == "1" ]]; then
+    connect_now=$(gum confirm "  Connect to this bot now?" && echo "y" || echo "n")
+  else
+    read -p "  Connect now? [Y/n] " connect_now
+    connect_now="${connect_now:-y}"
+  fi
+
+  if [[ "${connect_now,,}" != "n" ]]; then
+    launch_bot "$bot_id"
+  fi
+}
+
+cmd_release() {
+  local bot_id="$1"
+  local lockfile="$LOCKS_DIR/${bot_id}.lock"
+  if [[ -f "$lockfile" ]]; then
+    rm -f "$lockfile"
+    echo "  Released: $bot_id"
+  else
+    echo "  No lock found for: $bot_id"
+  fi
+}
+
+launch_bot() {
+  local bot_id="$1"
+  shift || true
+  local extra_args=("$@")
+
+  local bot
+  bot=$(get_bot_by_id "$bot_id")
+  if [[ -z "$bot" ]]; then
+    echo -e "  ${RED}Bot not found: $bot_id${NC}"
+    exit 1
+  fi
+
+  local token username purpose project
+  token=$(echo "$bot" | jq -r '.token')
+  username=$(echo "$bot" | jq -r '.username')
+  purpose=$(echo "$bot" | jq -r '.purpose')
+  project=$(echo "$bot" | jq -r '.project // empty')
+
+  # Check lock
+  local lock_pid
+  if lock_pid=$(is_bot_locked "$bot_id"); then
+    echo -e "  ${RED}Bot @$username is in use by PID $lock_pid${NC}"
+    echo "  Release it with: gumclaw --release $bot_id"
+    exit 1
+  fi
+
+  # Validate token
+  local valid_user
+  if [[ "$HAS_GUM" == "1" ]]; then
+    valid_user=$(gum spin --spinner dot --title "  Connecting to @$username..." -- bash -c "
+      result=\$(curl -s --max-time 5 'https://api.telegram.org/bot${token}/getMe')
+      echo \"\$result\" | jq -r '.result.username // empty'
+    ")
+  else
+    echo -n "  Validating @$username... "
+    valid_user=$(validate_token "$token") || true
+  fi
+
+  if [[ -z "$valid_user" ]]; then
+    echo -e "  ${RED}Token invalid or expired for @$username${NC}"
+    exit 1
+  fi
+
+  # CD to project dir
+  local launch_dir="${project:-$(pwd)}"
+  if [[ -n "$project" ]] && [[ -d "$project" ]]; then
+    cd "$project"
+    launch_dir="$project"
+  fi
+
+  # Run auto-pair
+  bash "$CHANNELS_DIR/auto-pair.sh" 2>/dev/null || true
+
+  # Write lock
+  lock_bot "$bot_id" "$launch_dir"
+
+  echo ""
+  if [[ "$HAS_GUM" == "1" ]]; then
+    gum style --foreground "#2FBF71" "  🐾 Launching Claude Code with @$username"
+    echo "  $(gum style --foreground '#8B7F77' "  $purpose • ${launch_dir/#$HOME/\~}")"
+  else
+    echo -e "  ${GREEN}🐾 Launching Claude Code with @$username${NC}"
+    echo -e "  ${DIM}$purpose • ${launch_dir/#$HOME/\~}${NC}"
+  fi
+  echo ""
+
+  # Cleanup lock on exit (best-effort — exec replaces process, trap may not fire)
+  trap "rm -f '$LOCKS_DIR/${bot_id}.lock'" EXIT INT TERM
+
+  # Launch Claude Code
+  TELEGRAM_BOT_TOKEN="$token" exec claude \
+    --dangerously-skip-permissions \
+    --channels plugin:telegram@claude-plugins-official \
+    "${extra_args[@]}" 2>/dev/null || \
+  TELEGRAM_BOT_TOKEN="$token" exec claude \
+    --dangerously-skip-permissions \
+    --channels plugin:telegram@claude-plugins-official
+}
+
+cmd_pick() {
+  ensure_registry
+  clean_stale_locks
+  header
+
+  local count
+  count=$(bot_count)
+
+  if [[ "$count" -eq 0 ]]; then
+    echo "  No bots registered yet."
+    echo ""
+    cmd_add
+    return
+  fi
+
+  # Build options list
+  local options=()
+  local ids=()
+  local locked_ids=()
+
+  for i in $(seq 0 $((count - 1))); do
+    local id username purpose
+    id=$(get_bot_field "$i" "id")
+    username=$(get_bot_field "$i" "username")
+    purpose=$(get_bot_field "$i" "purpose")
+
+    local lock_pid
+    if lock_pid=$(is_bot_locked "$id"); then
+      options+=("⚠ $id  @$username  $purpose  [IN USE: PID $lock_pid]")
+      locked_ids+=("$id")
+    else
+      options+=("● $id  @$username  $purpose")
+    fi
+    ids+=("$id")
+  done
+
+  options+=("✦ Register new bot...")
+
+  # Pick
+  local choice
+  if [[ "$HAS_GUM" == "1" ]]; then
+    choice=$(printf '%s\n' "${options[@]}" | gum choose --height $((count + 4)) --cursor.foreground "#FF5A2D" --selected.foreground "#2FBF71")
+  else
+    echo "  Available bots:"
+    echo ""
+    for i in "${!options[@]}"; do
+      echo "  $((i + 1)). ${options[$i]}"
+    done
+    echo ""
+    read -p "  Pick (1-$((count + 1))): " pick_num
+    if [[ "$pick_num" -gt "$count" ]] || [[ "$pick_num" -lt 1 ]]; then
+      choice="✦ Register new bot..."
+    else
+      choice="${options[$((pick_num - 1))]}"
+    fi
+  fi
+
+  # Handle choice
+  if [[ "$choice" == *"Register new bot"* ]]; then
+    cmd_add
+    return
+  fi
+
+  # Extract bot id from choice
+  local selected_id
+  selected_id=$(echo "$choice" | awk '{print $2}')
+
+  # Check if locked
+  for lid in "${locked_ids[@]}"; do
+    if [[ "$selected_id" == "$lid" ]]; then
+      echo ""
+      echo -e "  ${RED}That bot is in use. Pick a different one or release it:${NC}"
+      echo "  gumclaw --release $selected_id"
+      echo ""
+      cmd_pick
+      return
+    fi
+  done
+
+  launch_bot "$selected_id"
+}
+
+# --- Main ---
+
+ensure_registry
+
+case "${1:-}" in
+  --list|-l)
+    cmd_list
+    ;;
+  --add|-a)
+    cmd_add
+    ;;
+  --release|-r)
+    if [[ -z "${2:-}" ]]; then
+      echo "Usage: gumclaw --release <bot-id>"
+      exit 1
+    fi
+    cmd_release "$2"
+    ;;
+  --help|-h)
+    header
+    echo "  Usage:"
+    echo "    gumclaw                  Interactive bot picker + launch"
+    echo "    gumclaw <bot-id>         Direct launch"
+    echo "    gumclaw --list           Show all bots + status"
+    echo "    gumclaw --add            Register new bot"
+    echo "    gumclaw --release <id>   Force-release a lock"
+    echo ""
+    ;;
+  "")
+    cmd_pick
+    ;;
+  -*)
+    echo "Unknown flag: $1"
+    echo "Run: gumclaw --help"
+    exit 1
+    ;;
+  *)
+    # Direct launch by bot-id
+    clean_stale_locks
+    launch_bot "$1" "${@:2}"
+    ;;
+esac
