@@ -87,6 +87,43 @@ The official Telegram plugin sets `TELEGRAM_STATE_DIR=.claude/telegram` as a REL
 - Send a Telegram message without typing in terminal first
 - If still broken: same access.json controls both inbound and outbound
 
+## Group Setup
+
+### Adding the bot to a group
+
+1. Add the bot to your Telegram group (Settings → Add Members → search bot username)
+2. Send a message mentioning @yourbot in the group
+3. Find the group's chat ID:
+   ```bash
+   bash ~/.claude/channels/telegram/discover-groups.sh
+   ```
+4. Add the group to `~/.claude/channels/telegram/trusted-users.json`:
+   ```json
+   {
+     "users": [...],
+     "groups": [
+       {
+         "id": "-1001234567890",
+         "name": "My Team Chat",
+         "requireMention": true,
+         "allowFrom": []
+       }
+     ]
+   }
+   ```
+5. Run auto-pair: `bash ~/.claude/channels/telegram/auto-pair.sh`
+6. @mention the bot in the group — it should respond
+
+### Group config options
+
+- **requireMention** (default: true) — Bot only responds when @mentioned. Recommended for groups to avoid noise.
+- **allowFrom** (default: []) — Empty = anyone in group can trigger the bot. Add user IDs to restrict to specific people.
+
+### Group limitations
+- Permission requests (tool approval) are DM-only — they won't appear in groups
+- Bot commands (/start, /help, /status) only work in DMs
+- The bot won't respond to messages in groups it hasn't been configured for
+
 ## Architecture
 
 ```

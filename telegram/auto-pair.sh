@@ -1,5 +1,5 @@
 #!/bin/bash
-# auto-pair.sh — Ensures trusted Telegram users are pre-approved in ALL plugin state dirs.
+# auto-pair.sh — Ensures trusted users + groups are pre-approved in ALL plugin state dirs.
 # Runs on SessionStart via hook. Idempotent — safe to run multiple times.
 
 set -euo pipefail
@@ -11,8 +11,12 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 
 # Extract trusted user IDs
-TRUSTED_IDS=$(jq -r '.users[].id' "$CONFIG" 2>/dev/null)
-if [[ -z "$TRUSTED_IDS" ]]; then
+TRUSTED_IDS=$(jq -r '.users[]?.id // empty' "$CONFIG" 2>/dev/null)
+
+# Extract group configs
+GROUP_COUNT=$(jq -r '.groups | length' "$CONFIG" 2>/dev/null || echo "0")
+
+if [[ -z "$TRUSTED_IDS" ]] && [[ "$GROUP_COUNT" -eq 0 ]]; then
   exit 0
 fi
 
@@ -37,13 +41,13 @@ for ACCESS_FILE in "${ACCESS_FILES[@]}"; do
   CURRENT=$(cat "$ACCESS_FILE")
   UPDATED="$CURRENT"
 
+  # --- DM users ---
   for TID in $TRUSTED_IDS; do
     IN_ALLOW=$(echo "$UPDATED" | jq --arg uid "$TID" '.allowFrom | index($uid) != null')
-    if [[ "$IN_ALLOW" == "true" ]]; then
-      continue
+    if [[ "$IN_ALLOW" != "true" ]]; then
+      UPDATED=$(echo "$UPDATED" | jq --arg uid "$TID" '.allowFrom += [$uid] | .allowFrom |= unique')
+      CHANGED=1
     fi
-    UPDATED=$(echo "$UPDATED" | jq --arg uid "$TID" '.allowFrom += [$uid] | .allowFrom |= unique')
-    CHANGED=1
   done
 
   # Clear pending entries for trusted users
@@ -53,6 +57,28 @@ for ACCESS_FILE in "${ACCESS_FILES[@]}"; do
     ')
   done
 
+  # --- Groups ---
+  if [[ "$GROUP_COUNT" -gt 0 ]]; then
+    # Merge group configs from trusted-users.json into access.json
+    # Only adds groups that don't already exist — never overwrites existing group config
+    GROUPS_JSON=$(jq -c '.groups // []' "$CONFIG")
+    UPDATED=$(echo "$UPDATED" | jq --argjson groups "$GROUPS_JSON" '
+      reduce ($groups[]) as $g (.;
+        if .groups[$g.id] then .
+        else .groups[$g.id] = {
+          requireMention: ($g.requireMention // true),
+          allowFrom: ($g.allowFrom // [])
+        }
+        end
+      )
+    ')
+    # Check if groups actually changed
+    if [[ "$(echo "$CURRENT" | jq -c '.groups')" != "$(echo "$UPDATED" | jq -c '.groups')" ]]; then
+      CHANGED=1
+    fi
+  fi
+
+  # Write back if changed
   if [[ "$UPDATED" != "$CURRENT" ]]; then
     echo "$UPDATED" | jq '.' > "${ACCESS_FILE}.tmp"
     mv "${ACCESS_FILE}.tmp" "$ACCESS_FILE"
@@ -61,7 +87,7 @@ for ACCESS_FILE in "${ACCESS_FILES[@]}"; do
   fi
 done
 
-# Create approved signal files
+# Create approved signal files for DM users
 for TID in $TRUSTED_IDS; do
   for ACCESS_FILE in "${ACCESS_FILES[@]}"; do
     APPROVED_DIR="$(dirname "$ACCESS_FILE")/approved"
@@ -74,5 +100,5 @@ for TID in $TRUSTED_IDS; do
 done
 
 if [[ "$CHANGED" -eq 1 ]]; then
-  echo "auto-pair: updated access for trusted users"
+  echo "auto-pair: updated access for trusted users and groups"
 fi

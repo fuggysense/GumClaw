@@ -68,6 +68,37 @@ Interactive guided setup. Walk the user through each step conversationally.
 7. Run auto-pair now: `bash ~/.claude/channels/telegram/auto-pair.sh`
 8. Test: explain how to launch and test
 
+## Phase 2b: Group Setup (optional)
+
+1. Ask: "Do you want the bot to work in any Telegram groups?"
+   - If no, skip to Phase 3
+2. Explain the requirements:
+   - Bot must be added to the group
+   - By default, bot requires @mention in groups (configurable)
+   - Group members need to @mention the bot to trigger it
+3. Help discover group ID:
+   - Option A: Run `bash telegram/discover-groups.sh` — uses Bot API to find groups the bot has seen
+   - Option B: User provides group ID directly
+4. For each group, ask:
+   - Group name (for reference)
+   - Require @mention? (default: yes — recommended for groups)
+   - Restrict to specific users? (default: no — anyone in group can use it)
+5. Save group config to `~/.claude/channels/telegram/trusted-users.json` under the `groups` array:
+   ```json
+   {
+     "groups": [
+       {
+         "id": "-1001234567890",
+         "name": "My Team",
+         "requireMention": true,
+         "allowFrom": []
+       }
+     ]
+   }
+   ```
+6. Run auto-pair again to sync group config to all access.json files
+7. Explain: "Now @mention the bot in your group — it should respond"
+
 ## Phase 3: Summary
 
 Show a summary of everything that was set up:

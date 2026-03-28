@@ -164,14 +164,47 @@ else
     read -p "Your Telegram user ID: " TG_USER_ID
     if [[ -z "$TG_USER_ID" ]]; then
       echo "WARNING: No user ID. You'll need to pair manually."
-      echo '{"users": []}' | jq '.' > "$CHANNELS_DIR/trusted-users.json"
+      jq -n '{"users": [], "groups": []}' > "$CHANNELS_DIR/trusted-users.json"
     else
       read -p "Your name: " TG_USER_NAME
       TG_USER_NAME="${TG_USER_NAME:-User}"
       jq -n --arg id "$TG_USER_ID" --arg name "$TG_USER_NAME" \
-        '{"users": [{"id": $id, "name": $name, "note": "Primary operator"}]}' \
+        '{"users": [{"id": $id, "name": $name, "note": "Primary operator"}], "groups": []}' \
         > "$CHANNELS_DIR/trusted-users.json"
       echo "[ok] Trusted user: $TG_USER_NAME ($TG_USER_ID)"
+    fi
+  fi
+
+  # Groups
+  echo ""
+  read -p "Use this bot in any Telegram groups? [y/N] " SETUP_GROUPS
+  if [[ "${SETUP_GROUPS,,}" == "y" ]]; then
+    echo ""
+    echo "To find your group's chat ID:"
+    echo "  1. Add the bot to your group"
+    echo "  2. Send a message mentioning @yourbot in the group"
+    echo "  3. Run: bash $SCRIPT_DIR/telegram/discover-groups.sh"
+    echo ""
+    echo "Or enter the group chat ID manually (starts with - for groups):"
+    read -p "Group chat ID (or press Enter to skip): " GROUP_ID
+    if [[ -n "$GROUP_ID" ]]; then
+      read -p "Group name (for your reference): " GROUP_NAME
+      GROUP_NAME="${GROUP_NAME:-Group}"
+      read -p "Require @mention? [Y/n] " REQ_MENTION
+      REQ_MENTION=$([[ "${REQ_MENTION,,}" == "n" ]] && echo "false" || echo "true")
+      read -p "Restrict to specific users? Enter IDs comma-separated, or press Enter for anyone: " GROUP_ALLOW
+      if [[ -n "$GROUP_ALLOW" ]]; then
+        ALLOW_JSON=$(echo "$GROUP_ALLOW" | tr ',' '\n' | jq -R . | jq -s .)
+      else
+        ALLOW_JSON="[]"
+      fi
+      jq --arg id "$GROUP_ID" --arg name "$GROUP_NAME" --argjson mention "$REQ_MENTION" --argjson allow "$ALLOW_JSON" \
+        '.groups += [{"id": $id, "name": $name, "requireMention": $mention, "allowFrom": $allow}]' \
+        "$CHANNELS_DIR/trusted-users.json" > "$CHANNELS_DIR/trusted-users.json.tmp"
+      mv "$CHANNELS_DIR/trusted-users.json.tmp" "$CHANNELS_DIR/trusted-users.json"
+      echo "[ok] Group added: $GROUP_NAME ($GROUP_ID)"
+    else
+      echo "Skipped. Run discover-groups.sh later to add groups."
     fi
   fi
 

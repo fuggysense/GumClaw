@@ -5,5 +5,13 @@
       "name": "Your Name",
       "note": "Primary operator"
     }
+  ],
+  "groups": [
+    {
+      "id": "YOUR_GROUP_CHAT_ID",
+      "name": "My Team Chat",
+      "requireMention": true,
+      "allowFrom": []
+    }
   ]
 }
