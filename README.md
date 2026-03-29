@@ -87,10 +87,13 @@ claudeclaw-seamless/
 ├── install.sh                       # Bash installer
 ├── .claude/skills/
 │   └── setup.md                     # Guided /setup skill
-├── template/                        # Workspace blueprint
-│   ├── CLAUDE.md, SOUL.md, USER.md
-│   ├── agents/{alpha,beta,gamma}/
-│   └── shared/memory/
+├── CLAUDE.md                        # Workspace instructions (progressive setup)
+├── SOUL.md                          # Agent personality + tone
+├── USER.md                          # User context (fills in over time)
+├── cron-registry.json               # Scheduled tasks
+├── agents/{alpha,beta,gamma}/       # Sub-agent workspaces
+├── shared/memory/                   # Cross-agent memory
+├── memory/                          # Primary agent memory
 └── telegram/                        # GumClaw system
     ├── gumclaw                      # Launcher script
     ├── auto-pair.sh                 # Access syncing + stale lock cleanup
